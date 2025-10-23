@@ -12,7 +12,9 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(bodyParser.json());
 
-mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://koushikbhowmick04_db_user:eIRSWEBw8zUrsbsV@dev-koushik.wdi7itz.mongodb.net/')
+mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://koushikbhowmick04_db_user:eIRSWEBw8zUrsbsV@dev-koushik.wdi7itz.mongodb.net/Portfolio?retryWrites=true&w=majority',{
+    dbName: 'Portfolio'
+})
 .then(() => console.log('✅ Connected to MongoDB'))
 .catch((err) => console.error('❌ MongoDB connection error:', err));
 
@@ -44,6 +46,43 @@ app.post('/api/contacts', async (req, res) => {
     } catch (error) {
         console.error('Error saving contact:', error);
         res.status(500).json({ error: 'Failed to save contact' });
+    }
+});
+
+// Define schema for reviews
+const reviewSchema = new mongoose.Schema({
+    content: { type: String, required: true },
+    date: { type: Date, default: Date.now },
+});
+
+// Create model
+const Review = mongoose.model('Review', reviewSchema);
+
+app.get('/api/blogs', async (req, res) => {
+    try {
+        const reviews = await Review.find().sort({ date: -1 }); // latest first
+        res.status(200).json(reviews);
+    } catch (error) {
+        console.error('Error fetching reviews:', error);
+        res.status(500).json({ error: 'Failed to fetch reviews' });
+    }
+});
+
+app.post('/api/blogs', async (req, res) => {
+    try {
+        const { content } = req.body;
+
+        if (!content || content.trim() === '') {
+            return res.status(400).json({ error: 'Review content is required' });
+        }
+
+        const newReview = new Review({ content });
+        await newReview.save();
+
+        res.status(201).json({ message: 'Review submitted successfully' });
+    } catch (error) {
+        console.error('Error saving review:', error);
+        res.status(500).json({ error: 'Failed to submit review' });
     }
 });
 
