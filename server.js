@@ -3,26 +3,68 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000; 
 
+// Setup Nodemailer Transporter
+const transporter = nodemailer.createTransport({
+    service: 'gmail', // Standard fallback, can configure SMTP differently if needed
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
 // Middlewares
+app.use(helmet());
 app.use(cors());
 app.use(bodyParser.json());
 
-mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://koushikbhowmick04_db_user:eIRSWEBw8zUrsbsV@dev-koushik.wdi7itz.mongodb.net/Portfolio?retryWrites=true&w=majority',{
-    dbName: 'Portfolio'
+// Rate Limiting
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again later.' }
+});
+app.use('/api/', apiLimiter);
+
+const blogLikeSchema = new mongoose.Schema({
+    blogId: { type: String, required: true, unique: true },
+    likes: { type: Number, default: 0 }
+});
+const BlogLike = mongoose.model('BlogLike', blogLikeSchema);
+
+mongoose.connect(
+    process.env.MONGO_URI || 'mongodb+srv://koushikbhowmick04_db_user:eIRSWEBw8zUrsbsV@dev-koushik.wdi7itz.mongodb.net/Portfolio?retryWrites=true&w=majority',
+    {
+        dbName: 'Portfolio'
+    }
+)
+.then(async () => {
+    console.log('✅ Connected to MongoDB');
+    // Initialize default likes if they don't exist
+    const initialLikes = { '1': 84, '2': 62, '3': 95, '4': 73 };
+    for (const [blogId, likes] of Object.entries(initialLikes)) {
+        await BlogLike.updateOne(
+            { blogId },
+            { $setOnInsert: { likes } },
+            { upsert: true }
+        );
+    }
 })
-.then(() => console.log('✅ Connected to MongoDB'))
 .catch((err) => console.error('❌ MongoDB connection error:', err));
 
 const contactSchema = new mongoose.Schema({
-    name: String,
-    email: String,
+    name: { type: String, required: true },
+    email: { type: String, required: true },
     phone: String,
-    message: String,
+    message: { type: String, required: true },
     date: { type: Date, default: Date.now },
 });
 
@@ -38,10 +80,46 @@ app.get('/api/contacts', async (req, res) => {
     }
 });
 
-app.post('/api/contacts', async (req, res) => {
+app.post('/api/contacts', [
+    body('name').notEmpty().withMessage('Name is required').trim().escape(),
+    body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
+    body('phone').optional().trim().escape(),
+    body('message').notEmpty().withMessage('Message is required').trim().escape()
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
-        const newContact = new Contact(req.body);
+        const { name, email, phone, message, botCheck } = req.body;
+        
+        // Honeypot check
+        if (botCheck) {
+            console.log('Spam bot caught by honeypot! Silently rejecting.');
+            // Fake a success response to fool the bot
+            return res.status(201).json({ message: 'Contact saved successfully' });
+        }
+
+        const newContact = new Contact({ name, email, phone, message });
         await newContact.save();
+
+        // Send email notification
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: process.env.EMAIL_USER, // sending to yourself
+            subject: `New Contact Form Submission from ${name}`,
+            text: `You have received a new contact submission.\n\nName: ${name}\nEmail: ${email}\nPhone: ${phone || 'N/A'}\nMessage:\n${message}`
+        };
+        
+        transporter.sendMail(mailOptions, (err, info) => {
+            if (err) {
+                console.error('Error sending email notification:', err);
+            } else {
+                console.log('Email notification sent:', info.response);
+            }
+        });
+
         res.status(201).json({ message: 'Contact saved successfully' });
     } catch (error) {
         console.error('Error saving contact:', error);
@@ -83,6 +161,40 @@ app.post('/api/blogs', async (req, res) => {
     } catch (error) {
         console.error('Error saving review:', error);
         res.status(500).json({ error: 'Failed to submit review' });
+    }
+});
+
+// GET all blog likes
+app.get('/api/blogs/likes', async (req, res) => {
+    try {
+        const likes = await BlogLike.find();
+        const likesMap = {};
+        likes.forEach(like => {
+            likesMap[like.blogId] = like.likes;
+        });
+        res.status(200).json(likesMap);
+    } catch (error) {
+        console.error('Error fetching likes:', error);
+        res.status(500).json({ error: 'Failed to fetch likes' });
+    }
+});
+
+// POST to increment or decrement a blog like
+app.post('/api/blogs/likes/:id', async (req, res) => {
+    try {
+        const { liked } = req.body;
+        const incValue = liked ? 1 : -1;
+        
+        const blogLike = await BlogLike.findOneAndUpdate(
+            { blogId: req.params.id },
+            { $inc: { likes: incValue } },
+            { new: true, upsert: true }
+        );
+        
+        res.status(200).json({ likes: blogLike.likes });
+    } catch (error) {
+        console.error('Error updating like:', error);
+        res.status(500).json({ error: 'Failed to update like' });
     }
 });
 
