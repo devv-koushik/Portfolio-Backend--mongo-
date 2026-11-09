@@ -11,16 +11,24 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-// server.js
+
+// Trust reverse proxy (required for Render / rate limiting)
+app.set('trust proxy', 1);
+// Force IPv4 and Google DNS for reliable SRV and SMTP resolution
 const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '8.8.4.4']); // Forces Node.js to resolve SRV records via Google DNS
+dns.setDefaultResultOrder('ipv4first');
+try {
+    dns.setServers(['8.8.8.8', '8.8.4.4']);
+} catch (e) {
+    console.warn('Could not set custom DNS servers:', e.message);
+}
 
-
-
-
-// Setup Nodemailer Transporter
+// Setup Nodemailer Transporter with explicit IPv4
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // Standard fallback, can configure SMTP differently if needed
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    family: 4, // Force IPv4 to avoid ENETUNREACH IPv6 routing errors on cloud containers
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
